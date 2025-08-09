@@ -1,0 +1,302 @@
+---
+title: "ÖM"
+author: "Georgios Pnigouras"
+date: "2025-04-15"
+output: html_document
+---
+
+
+
+```{r}
+
+# Load necessary libraries
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(spdep)
+library(spatstat)
+library(spData)
+library(mapview)
+library(spatialRF)
+library(spdep)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(tmap)
+library(RandomForestsGLS)
+library(BRISC)
+library(randomForest)
+
+# Importind the datasets, choosing the appropriate variables and alter to log the chemical variables
+
+# Read the first dataset (main data)
+data1 <- read_excel("C:\\Uni\\Thesis\\SLU\\lakes_pH_original.xlsx")
+
+# Second dataset with information about the region of each lake
+data2 <- read_excel("C:\\Uni\\Thesis\\SLU\\Copy of Omdrev 19-24 Regioner.xlsx", 
+                    sheet = "Omdrev 2019-2024 RegionsMD-MVM ")
+
+# Matching the two datasets according to coordinates
+data2_subset <- data2 %>%
+  select(stationskoordinat_e_y, stationskoordinat_n_x, LandsdelLänHK)
+
+# Merge data1 with data2_subset using a left join on the coordinate columns
+merged_data <- left_join(data1, data2_subset,
+                         by = c("stationskoordinat_e_y", "stationskoordinat_n_x"))
+
+
+# Merged dataset
+merged_data <- merged_data[complete.cases(merged_data), ]
+
+lakes <- subset(merged_data, select = -c(ingen_tackning))
+
+# For the later analysis is applied logarithmic transformation in the variables explaining the chemical elements of # the lakes
+lakes[, 9:35] <- log(lakes[, 9:35])
+
+# Target variable
+dependent.lakes <- "p_h"
+
+# Chemical variables (model 1)
+predictor.lakes.chem <- colnames(lakes)[c(9:27,29:31,33:35)]
+
+# Environment variables (model 2)
+predictor.lakes.env <- colnames(lakes)[c(37,41:54)]
+
+# The whole set of variables (model 3)
+predictor.lakes.total <-   c(predictor.lakes.env, predictor.lakes.chem)
+
+# Frequency table, number of observations per region 
+table(lakes$LandsdelLänHK)
+
+```
+
+
+
+```{r}
+# Keeping only the observations for the ÖM regio
+# Variable analysis for ÖM
+
+lakes_ÖM <- lakes %>% 
+  filter(LandsdelLänHK == "ÖM")
+
+# Visualise the ÖM and calculating the spatial autocorrelation of the pH values in this region with the help of
+# Moran's I value.
+
+tmap_mode("view")  # For interactive
+
+# Convert to an sf object with CRS 3006
+lakes_ÖM_sf <- st_as_sf(lakes_ÖM, coords = c("stationskoordinat_e_y", "stationskoordinat_n_x"), crs = 3006)
+
+# Get the Swedish boundary using rnaturalearth and transform it to CRS 3006
+sweden <- ne_countries(country = "Sweden", scale = "medium", returnclass = "sf")
+sweden <- st_transform(sweden, crs = 3006)
+
+# Create a basic interactive map
+tm_shape(sweden) +
+  tm_polygons(col = "lightgray", border.col = "white") +
+tm_shape(lakes_ÖM_sf) +
+  tm_dots(col = "p_h", size = 0.05, palette = "RdYlBu", title = "pH") +
+tm_layout(title = "Swedish Lakes pH Data for ÖM region")
+
+#tmap_mode("plot")  # For static
+
+# MORANS I LEVEL
+
+nb_ÖM <- knn2nb(knearneigh(st_coordinates(lakes_ÖM_sf), k = 10))
+
+weights_ÖM <- nb2listw(nb_ÖM,  glist=NULL,style = "W")
+
+moran_ÖM <- moran.test(lakes_ÖM_sf$p_h, weights_ÖM)
+
+moran_ÖM
+
+
+```
+
+
+
+
+```{r}
+# Variable importance for the two different approaches( RF, RFGLS) for the ÖM region for the model 1(only chemical 
+# variables).
+
+set.seed(1567)
+
+
+n      <- nrow(lakes_ÖM)
+train_index <- sample(seq_len(n), size = floor(0.8 * n)) 
+test_index  <- setdiff(seq_len(n), train_index)
+
+
+#Variable analysis ÖM
+y <- lakes_ÖM[,"p_h"]
+
+x <- lakes_ÖM[,predictor.lakes.chem]
+
+coords <- lakes_ÖM[,c("stationskoordinat_e_y", "stationskoordinat_n_x")]
+
+coords <- do.call(cbind, coords)
+
+x <- do.call(cbind, x)
+
+Y <- as.numeric(unlist(y))
+
+# 2) Build training and test sets
+x_full   <- lakes_ÖM[, predictor.lakes.chem]
+y_full   <- lakes_ÖM$p_h
+coords_full <- as.matrix(lakes_ÖM[, c("stationskoordinat_e_y", "stationskoordinat_n_x")])
+
+x_train  <- x_full[ train_index, , drop = FALSE]
+y_train  <- y_full[ train_index]
+coords_train <- coords_full[ train_index, , drop = FALSE]
+x_test   <- x_full[ test_index, , drop = FALSE]
+y_test   <- y_full[ test_index]
+coords_test  <- coords_full[ test_index, , drop = FALSE]
+
+
+rf_model_ÖM_chem <- randomForest(x = x_train, y = y_train,
+                            ntree = 100, importance = TRUE)
+
+rfgls_model_ÖM_chem <- RFGLS_estimate_spatial(
+  coords      = coords_train,
+  y           = y_train,
+  X           = as.matrix(x_train),
+  ntree       = 100,
+  cov.model   = "matern",
+  n.neighbors = 15,
+  param_estimate = TRUE,
+  verbose     = TRUE,
+  h           = 15,
+  pinv_choice = 0,
+  mtry        = ncol(x_train)
+)
+
+
+# Baseline predictions for Random Forest
+pred_rf_test      <- predict(rf_model_ÖM_chem, newdata = x_test)
+baseline_rmse_rf  <- sqrt(mean((y_test - pred_rf_test)^2))
+
+# Baseline predictions for RF-GLS
+pred_gls_test     <- RFGLS_predict(rfgls_model_ÖM_chem, X = as.matrix(x_test))$predicted
+baseline_rmse_gls <- sqrt(mean((y_test - pred_gls_test)^2))
+
+
+# Number of repeats for stability
+n_repeats <- 100
+
+# Initialize storage
+perm_imp_rf  <- setNames(numeric(ncol(x_test)), colnames(x_test))
+perm_imp_gls <- setNames(numeric(ncol(x_test)), colnames(x_test))
+
+
+
+
+# Initialize lists to hold full delta vectors
+deltas_rf_list  <- vector("list", length = ncol(x_test))
+deltas_gls_list <- vector("list", length = ncol(x_test))
+names(deltas_rf_list)  <- colnames(x_test)
+names(deltas_gls_list) <- colnames(x_test)
+
+# Permutation loop (modified)
+for (var in colnames(x_test)) {
+  
+  delta_rf  <- numeric(n_repeats)
+  delta_gls <- numeric(n_repeats)
+  
+  for (i in seq_len(n_repeats)) {
+    x_perm <- x_test
+    #x_perm[, var] <- sample(x_perm[, var])
+    x_perm[[var]] <- sample(x_perm[[var]], size = nrow(x_perm), replace = FALSE)
+    # RF
+    p_rf   <- predict(rf_model_ÖM_chem, x_perm)
+    delta_rf[i] <- sqrt(mean((y_test - p_rf)^2)) - baseline_rmse_rf
+    
+    # RF‑GLS
+    p_gls  <- RFGLS_predict(rfgls_model_ÖM_chem, X = as.matrix(x_perm))$predicted
+    delta_gls[i] <- sqrt(mean((y_test - p_gls)^2)) - baseline_rmse_gls
+  }
+  
+  deltas_rf_list[[var]]  <- delta_rf
+  deltas_gls_list[[var]] <- delta_gls
+  
+  perm_imp_rf[var]  <- mean(delta_rf)
+  perm_imp_gls[var] <- mean(delta_gls)
+}
+
+# Compute 95% CIs
+ci_level <- 0.95
+alpha    <- (1 - ci_level) / 2
+
+ci_rf  <- t(sapply(deltas_rf_list, function(d) quantile(d, probs = c(alpha, 1-alpha))))
+ci_gls <- t(sapply(deltas_gls_list, function(d) quantile(d, probs = c(alpha, 1-alpha))))
+
+# Combine into data frames
+importance_rf_df <- data.frame(
+  Variable = names(perm_imp_rf),
+  MeanDeltaRMSE = perm_imp_rf,
+  CI_Lower = ci_rf[,1],
+  CI_Upper = ci_rf[,2]
+)
+importance_gls_df <- data.frame(
+  Variable = names(perm_imp_gls),
+  MeanDeltaRMSE = perm_imp_gls,
+  CI_Lower = ci_gls[,1],
+  CI_Upper = ci_gls[,2]
+)
+
+# Sort by importance
+importance_rf_df  <- importance_rf_df [order(-importance_rf_df$MeanDeltaRMSE), ]
+importance_gls_df <- importance_gls_df[order(-importance_gls_df$MeanDeltaRMSE), ]
+
+print(importance_rf_df)
+print(importance_gls_df)
+
+# ─── Prepare your two data frames (if not already) ─────────────────────────
+# importance_rf_df and importance_gls_df should already have:
+#   Variable, MeanDeltaRMSE, CI_Lower, CI_Upper, and be ordered/factored.
+
+# Example re‐ordering step (if needed):
+importance_rf_df <- importance_rf_df %>%
+  arrange(MeanDeltaRMSE) %>%
+  mutate(Variable = factor(Variable, levels = Variable))
+
+importance_gls_df <- importance_gls_df %>%
+  arrange(MeanDeltaRMSE) %>%
+  mutate(Variable = factor(Variable, levels = Variable))
+
+# ─── Plot RF Importance ────────────────────────────────────────────────────
+p_rf <- ggplot(importance_rf_df, aes(x = MeanDeltaRMSE, y = Variable)) +
+  geom_point(size = 3, color = "#1f78b4") +
+  geom_errorbarh(aes(xmin = CI_Lower, xmax = CI_Upper),
+                 height = 0.2, color = "#1f78b4") +
+  labs(
+    x     = "Increase in RMSE",
+    y     = NULL,
+    title = "RF Permutation Importance Model 1 ÖM",
+    subtitle = "Ordered by Mean ΔRMSE (with 95% CI)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(panel.grid.major.y = element_blank())
+
+# ─── Plot RF‑GLS Importance ────────────────────────────────────────────────
+p_gls <- ggplot(importance_gls_df, aes(x = MeanDeltaRMSE, y = Variable)) +
+  geom_point(size = 3, color = "#33a02c") +
+  geom_errorbarh(aes(xmin = CI_Lower, xmax = CI_Upper),
+                 height = 0.2, color = "#33a02c") +
+  labs(
+    x     = "Increase in RMSE",
+    y     = NULL,
+    title = "RF-GLS Permutation Importance Model 1 ÖM",
+    subtitle = "Ordered by Mean ΔRMSE (with 95% CI)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(panel.grid.major.y = element_blank())
+
+
+
+
+
+
+```
+
+

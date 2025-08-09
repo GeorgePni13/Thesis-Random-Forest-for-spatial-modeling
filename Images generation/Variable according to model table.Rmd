@@ -1,0 +1,138 @@
+---
+title: "Variable according to model table"
+author: "Georgios Pnigouras"
+date: "2025-05-15"
+output: html_document
+---
+
+```{r}
+
+# Load necessary libraries
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(spdep)
+library(spatstat)
+library(spData)
+library(mapview)
+library(spatialRF)
+library(spdep)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(tmap)
+library(RandomForestsGLS)
+library(BRISC)
+library(randomForest)
+
+# Read the first dataset (main data)
+data1 <- read_excel("C:\\Uni\\Thesis\\SLU\\lakes_pH_original.xlsx")
+
+
+data2 <- read_excel("C:\\Uni\\Thesis\\SLU\\Copy of Omdrev 19-24 Regioner.xlsx", 
+                    sheet = "Omdrev 2019-2024 RegionsMD-MVM ")
+
+
+data2_subset <- data2 %>%
+  select(stationskoordinat_e_y, stationskoordinat_n_x, LandsdelLänHK)
+
+# Merge data1 with data2_subset using a left join on the coordinate columns
+merged_data <- left_join(data1, data2_subset,
+                         by = c("stationskoordinat_e_y", "stationskoordinat_n_x"))
+
+
+
+merged_data <- merged_data[complete.cases(merged_data), ]
+
+lakes <- subset(merged_data, select = -c(ingen_tackning))
+
+lakes[, 9:35] <- log(lakes[, 9:35])
+
+
+lakes_ÖM <- lakes %>% 
+  filter(LandsdelLänHK == "ÖM")
+
+dependent.lakes.name <- "p_h"
+
+predictor.lakes.names <- colnames(lakes)[c(9:27,29:31,33:35)]
+
+predictor.lakes.edafos <- colnames(lakes_ÖM)[c(37,41:54)]
+ 
+predictor.lakes.ola <-   c(predictor.lakes.edafos, predictor.lakes.names)
+
+lakes_ÖM[predictor.lakes.edafos]
+# install.packages(c("tibble", "dplyr", "knitr"))
+library(tibble)
+library(dplyr)
+library(knitr)
+
+# 1) Define your covariates and their human‑readable names
+chem_vars <- c("al_mg_l", "as_mg_l", "ca_mg_l", "cd_mg_l", "cl_mg_l",
+               "co_mg_l", "cr_mg_l", "cu_mg_l", "f_mg_l",  "fe_mg_l",
+               "k_mg_l",  "kond_25_m_s_m", "mg_mg_l", "mn_mg_l",
+               "na_mg_l","nh4_n_mg_l_n", "ni_mg_l", "no2_no3_n_mg_l_n",
+               "pb_mg_l",  "si_mg_l", "toc_mg_l_c",
+               "tot_n_t_nb_mg_l_n", "v_mg_l", "zn_mg_l",
+               "SO4_komb")
+
+chem_names <- c("Aluminium (mg L⁻¹)", "Arsenic (mg L⁻¹)", "Calcium (mg L⁻¹)",
+                "Cadmium (mg L⁻¹)", "Chloride (mg L⁻¹)", "Cobalt (mg L⁻¹)",
+                "Chromium (mg L⁻¹)", "Copper (mg L⁻¹)", "Fluoride (mg L⁻¹)",
+                "Iron (mg L⁻¹)", "Potassium (mg L⁻¹)",
+                "Conductivity 25 °C (mS m⁻¹)", "Magnesium (mg L⁻¹)",
+                "Manganese (mg L⁻¹)", "Sodium (mg L⁻¹)",
+                "Ammonium (mg L⁻¹ N)", "Nickel (mg L⁻¹)",
+                "Nitrate + Nitrite (mg L⁻¹ N)", "Lead (mg L⁻¹)", "Silica (mg L⁻¹)",
+                "TOC (mg L⁻¹ C)", "Total N (mg L⁻¹ N)", "Vanadium (mg L⁻¹)",
+                "Zinc (mg L⁻¹)", "Sulfate (mg L⁻¹)")
+
+land_vars <- c("elev_utl", "area_aro_km2",
+               "blandskog", "gran_och_barrblandskog", "hedmark",
+               "hallmark", "hardgjorda_ytor", "lovskog", "semiurbant",
+               "sjo_och_vattendrag", "skog_pa_vatmark", "tallskog",
+               "ungskog", "akermark", "oppen_vatmark")
+
+land_names <- c("Elevation (m)", 
+                "Catchment area (km²)", "Mixed forest",
+                "Conifer‑broadleaf forest", "Heathland",
+                "Broadleaf forest", "Impervious surface",
+                "Broadleaf deciduous forest", "Semi‑urban",
+                "Lakes & waterways", "Wetland forest",
+                "Pine forest", "Young forest", "Arable land",
+                "Open wetland")
+
+# 2) Build a single tibble with category info
+tbl <- tibble(
+  Covariate = c("pH",
+                chem_names,
+                land_names),
+  Category  = c("Response",
+                rep("Water chemistry", length(chem_names)),
+                rep("Landscape & catchment", length(land_names)))
+)
+
+# 3) Add columns for which model includes each variable
+#    Model 1: pH ~ water‑chemistry
+#    Model 2: pH ~ landscape descriptors
+#    Model 3: pH ~ all predictors
+tbl <- tbl %>%
+  mutate(
+    Model1 = if_else(Category=="Water chemistry", "Predictor",
+               if_else(Covariate=="pH", "Response","—")),
+    Model2 = if_else(Category=="Landscape & catchment", "Predictor",
+               if_else(Covariate=="pH", "Response","—")),
+    Model3 = if_else(Covariate=="pH", "Response", "Predictor")
+  )
+
+# 4) Print with knitr::kable
+kable(
+  tbl,
+  booktabs = TRUE,
+  caption  = "List of response and predictors used in each of the three models. All data are from the Cyclically low‑intensity monitored lakes program."
+)
+
+
+
+```
+
+

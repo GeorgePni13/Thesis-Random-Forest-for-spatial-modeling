@@ -1,0 +1,132 @@
+---
+title: "Hyperparameters sensitivity"
+author: "Georgios Pnigouras"
+date: "2025-05-10"
+output: html_document
+---
+
+
+```{r}
+
+set.seed(123)
+library(sf)
+library(raster)
+library(ggplot2)
+library(gstat)
+library(spdep)
+
+# Domain polygon
+domain_poly <- st_as_sf(
+  st_sfc(
+    st_polygon(list(matrix(c(0,0, 100,0, 100,100, 0,100, 0,0),
+                           ncol=2, byrow=TRUE)))
+  )
+)
+
+# Raster grid points
+r        <- raster(ncols=200, nrows=200, xmn=0, xmx=100, ymn=0, ymx=100)
+grid_pts <- st_as_sf(rasterToPoints(r, spatial=TRUE))
+
+# Parameter grids
+range_values <- c(4, 8, 40)
+sd_factors   <- c(0.01, 0.1, 0.25)
+psill_values <- c(0.215, 0.86, 2.15)  # will be multiplied by sd_factor
+
+params_df <- expand.grid(
+  range  = range_values,
+  sd_fac = sd_factors,
+  psill_mult = psill_values,
+  KEEP.OUT.ATTRS = FALSE,
+  stringsAsFactors = FALSE
+)
+
+params_df$MoranI <- NA_real_
+
+# Loop over parameter sets
+for (i in seq_len(nrow(params_df))) {
+  range_v <- params_df$range[i]
+  sd_fac  <- params_df$sd_fac[i]
+  psill   <- params_df$psill_mult[i] * sd_fac
+  sd_nug  <- sd_fac * psill
+
+  morans <- numeric(100)
+
+  for (rep in 1:100) {
+    set.seed(1000 + i*10 + rep)
+
+    # Simulate Matérn fields
+    matern_model <- vgm(
+      model="Mat",
+      psill = psill,
+      range = range_v,
+      nugget = 0,
+      kappa = 1.5
+    )
+
+    g <- gstat(formula = z ~ 1, dummy = TRUE, beta = 0,
+               model = matern_model, nmax = 50)
+    cov_sims <- predict(g, grid_pts, nsim = 4)
+    cov_df   <- as.data.frame(cov_sims)
+
+    # Deterministic + noise
+    X1       <- cov_df$sim1
+    X2       <- cov_df$sim2
+    X3       <- cov_df$sim3
+    det_part <- sin(X1/10) + 2*log(abs(X2)+1) + 0.3*X2*X3
+    error    <- cov_df$sim4
+    Y        <- det_part + error + rnorm(nrow(cov_df), sd = sd_nug)
+
+    
+     # rasterize outcome
+    all_st <- stack(
+      rasterFromXYZ(cbind(st_coordinates(grid_pts), Y)),
+      rasterFromXYZ(cbind(st_coordinates(grid_pts), X1)),
+      rasterFromXYZ(cbind(st_coordinates(grid_pts), X2)),
+      rasterFromXYZ(cbind(st_coordinates(grid_pts), X3))
+    )
+    train_pts <- st_sample(domain_poly, 1000)
+    coords    <- st_coordinates(train_pts)
+    df        <- as.data.frame(extract(all_st, coords))
+    
+    # Moran's I
+    nb        <- knn2nb(knearneigh(coords, k=20))
+    lw        <- nb2listw(nb, style="W")
+    morans[rep] <- moran.test(df$Y, lw)$estimate[1]
+    
+    
+    
+    
+    
+    
+  }
+
+  params_df$MoranI[i] <- mean(morans)
+}
+
+# Plot
+ggplot(params_df, aes(x = psill_mult , y = MoranI, color = factor(range))) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ sd_fac, labeller = label_bquote(tau^2 == .(sd_fac))) +
+  scale_color_discrete(name = "Range") +
+  labs(x = expression(sigma^2), y = "Mean Moran's I",
+       subtitle = "Lines = different ranges; facets = different nugget fractions") +
+  theme_minimal()
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
