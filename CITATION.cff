@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite it as below."
+title: "Spatial random forests in the presence of spatially correlated predictors"
+authors:
+  - family-names: Pnigouras
+    given-names: Georgios
+  - family-names: von Brömssen
+    given-names: Claudia
+year: 2026
+repository-code: "https://github.com/GeorgePni13/Thesis-Random-Forest-for-spatial-modeling"
